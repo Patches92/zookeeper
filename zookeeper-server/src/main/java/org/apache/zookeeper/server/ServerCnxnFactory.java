@@ -213,22 +213,37 @@ public abstract class ServerCnxnFactory {
             securityException = e;
         }
 
+        LOG.info("**** jaasFile: " + System.getProperty(Environment.JAAS_CONF_KEY));
+        LOG.info("**** loginContextName: " + System.getProperty(ZooKeeperSaslServer.LOGIN_CONTEXT_NAME_KEY));
+        LOG.info("**** security exception is null: " + (securityException == null ? "yes" : "no"));
+        LOG.info("**** entries is null: " + (entries == null? "yes" : "no"));
+        if(entries!=null)
+            LOG.info("**** entries length: " + entries.length);
+
         // No entries in jaas.conf
         // If there's a configuration exception fetching the jaas section and
         // the user has required sasl by specifying a LOGIN_CONTEXT_NAME_KEY or a jaas file
         // we throw an exception otherwise we continue without authentication.
         if (entries == null) {
+            LOG.info("**** entries null 1");
             String jaasFile = System.getProperty(Environment.JAAS_CONF_KEY);
             String loginContextName = System.getProperty(ZooKeeperSaslServer.LOGIN_CONTEXT_NAME_KEY);
             if (securityException != null && (loginContextName != null || jaasFile != null)) {
+                LOG.info("**** entries null 2");
                 String errorMessage = "No JAAS configuration section named '" + serverSection +  "' was found";
                 if (jaasFile != null) {
+                    LOG.info("**** entries null 3");
+
                     errorMessage += " in '" + jaasFile + "'.";
                 }
                 if (loginContextName != null) {
+                    LOG.info("**** entries null 4");
+
                     errorMessage += " But " + ZooKeeperSaslServer.LOGIN_CONTEXT_NAME_KEY + " was set.";
                 }
-                LOG.error(errorMessage);
+                LOG.info("**** entries null 5");
+
+                LOG.error(errorMessage, securityException);
                 throw new IOException(errorMessage);
             }
             return;
