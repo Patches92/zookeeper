@@ -20,6 +20,7 @@
 package org.apache.zookeeper.server.quorum;
 
 import java.io.IOException;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.Map;
@@ -239,190 +240,198 @@ public class FastLeaderElection implements Election {
 
                         // this is the backwardCompatibility mode for no version information
                         boolean backCompatibility40 = (response.buffer.capacity() == 40);
-                        
-                        response.buffer.clear();
 
-                        // Instantiate Notification and set its attributes
-                        Notification n = new Notification();
+                        try {
 
-                        int rstate = response.buffer.getInt();
-                        long rleader = response.buffer.getLong();
-                        long rzxid = response.buffer.getLong();
-                        long relectionEpoch = response.buffer.getLong();
-                        long rpeerepoch;
+                            response.buffer.clear();
 
-                        int version = 0x0;
-                        if (!backCompatibility28) {
-                            rpeerepoch = response.buffer.getLong();
-                            if (!backCompatibility40) {
-                                /*
-                                 * Version added in 3.4.6
-                                 */
-                                
-                                version = response.buffer.getInt();
+                            // Instantiate Notification and set its attributes
+                            Notification n = new Notification();
+
+                            int rstate = response.buffer.getInt();
+                            long rleader = response.buffer.getLong();
+                            long rzxid = response.buffer.getLong();
+                            long relectionEpoch = response.buffer.getLong();
+                            long rpeerepoch;
+
+                            int version = 0x0;
+                            if (!backCompatibility28) {
+                                rpeerepoch = response.buffer.getLong();
+                                if (!backCompatibility40) {
+                                    /*
+                                     * Version added in 3.4.6
+                                     */
+
+                                    version = response.buffer.getInt();
+                                } else {
+                                    LOG.info("Backward compatibility mode (36 bits), server id: {}", response.sid);
+                                }
                             } else {
-                                LOG.info("Backward compatibility mode (36 bits), server id: {}", response.sid);
+                                LOG.info("Backward compatibility mode (28 bits), server id: {}", response.sid);
+                                rpeerepoch = ZxidUtils.getEpochFromZxid(rzxid);
                             }
-                        } else {
-                            LOG.info("Backward compatibility mode (28 bits), server id: {}", response.sid);
-                            rpeerepoch = ZxidUtils.getEpochFromZxid(rzxid);
-                        }
 
-                        QuorumVerifier rqv = null;
+                            QuorumVerifier rqv = null;
 
-                        // check if we have a version that includes config. If so extract config info from message.
-                        if (version > 0x1) {
-                            int configLength = response.buffer.getInt();
-                            byte b[] = new byte[configLength];
+                            // check if we have a version that includes config. If so extract config info from message.
+                            if (version > 0x1) {
+                                int configLength = response.buffer.getInt();
+                                byte b[] = new byte[configLength];
 
-                            response.buffer.get(b);
-                                                       
-                            synchronized(self) {
-                                try {
-                                    rqv = self.configFromString(new String(b));
-                                    QuorumVerifier curQV = self.getQuorumVerifier();
-                                    if (rqv.getVersion() > curQV.getVersion()) {
-                                        LOG.info("{} Received version: {} my version: {}", self.getId(),
-                                                Long.toHexString(rqv.getVersion()),
-                                                Long.toHexString(self.getQuorumVerifier().getVersion()));
-                                        if (self.getPeerState() == ServerState.LOOKING) {
-                                            LOG.debug("Invoking processReconfig(), state: {}", self.getServerState());
-                                            self.processReconfig(rqv, null, null, false);
-                                            if (!rqv.equals(curQV)) {
-                                                LOG.info("restarting leader election");
-                                                self.shuttingDownLE = true;
-                                                self.getElectionAlg().shutdown();
+                                response.buffer.get(b);
 
-                                                break;
+                                synchronized (self) {
+                                    try {
+                                        rqv = self.configFromString(new String(b));
+                                        QuorumVerifier curQV = self.getQuorumVerifier();
+                                        if (rqv.getVersion() > curQV.getVersion()) {
+                                            LOG.info("{} Received version: {} my version: {}", self.getId(),
+                                                    Long.toHexString(rqv.getVersion()),
+                                                    Long.toHexString(self.getQuorumVerifier().getVersion()));
+                                            if (self.getPeerState() == ServerState.LOOKING) {
+                                                LOG.debug("Invoking processReconfig(), state: {}", self.getServerState());
+                                                self.processReconfig(rqv, null, null, false);
+                                                if (!rqv.equals(curQV)) {
+                                                    LOG.info("restarting leader election");
+                                                    self.shuttingDownLE = true;
+                                                    self.getElectionAlg().shutdown();
+
+                                                    break;
+                                                }
+                                            } else {
+                                                LOG.debug("Skip processReconfig(), state: {}", self.getServerState());
                                             }
-                                        } else {
-                                            LOG.debug("Skip processReconfig(), state: {}", self.getServerState());
                                         }
+                                    } catch (IOException e) {
+                                        LOG.error("Something went wrong while processing config received from {}", response.sid);
+                                    } catch (ConfigException e) {
+                                        LOG.error("Something went wrong while processing config received from {}", response.sid);
                                     }
-                                } catch (IOException e) {
-                                    LOG.error("Something went wrong while processing config received from {}", response.sid);
-                               } catch (ConfigException e) {
-                                   LOG.error("Something went wrong while processing config received from {}", response.sid);
-                               }
-                            }                          
-                        } else {
-                            LOG.info("Backward compatibility mode (before reconfig), server id: {}", response.sid);
-                        }
-                       
-                        /*
-                         * If it is from a non-voting server (such as an observer or
-                         * a non-voting follower), respond right away.
-                         */
-                        if(!validVoter(response.sid)) {
-                            Vote current = self.getCurrentVote();
-                            QuorumVerifier qv = self.getQuorumVerifier();
-                            ToSend notmsg = new ToSend(ToSend.mType.notification,
-                                    current.getId(),
-                                    current.getZxid(),
-                                    logicalclock.get(),
-                                    self.getPeerState(),
-                                    response.sid,
-                                    current.getPeerEpoch(),
-                                    qv.toString().getBytes());
-
-                            sendqueue.offer(notmsg);
-                        } else {
-                            // Receive new message
-                            if (LOG.isDebugEnabled()) {
-                                LOG.debug("Receive new notification message. My id = "
-                                        + self.getId());
-                            }
-
-                            // State of peer that sent this message
-                            QuorumPeer.ServerState ackstate = QuorumPeer.ServerState.LOOKING;
-                            switch (rstate) {
-                            case 0:
-                                ackstate = QuorumPeer.ServerState.LOOKING;
-                                break;
-                            case 1:
-                                ackstate = QuorumPeer.ServerState.FOLLOWING;
-                                break;
-                            case 2:
-                                ackstate = QuorumPeer.ServerState.LEADING;
-                                break;
-                            case 3:
-                                ackstate = QuorumPeer.ServerState.OBSERVING;
-                                break;
-                            default:
-                                continue;
-                            }
-
-                            n.leader = rleader;
-                            n.zxid = rzxid;
-                            n.electionEpoch = relectionEpoch;
-                            n.state = ackstate;
-                            n.sid = response.sid;
-                            n.peerEpoch = rpeerepoch;
-                            n.version = version;
-                            n.qv = rqv;
-                            /*
-                             * Print notification info
-                             */
-                            if(LOG.isInfoEnabled()){
-                                printNotification(n);
-                            }
-
-                            /*
-                             * If this server is looking, then send proposed leader
-                             */
-
-                            if(self.getPeerState() == QuorumPeer.ServerState.LOOKING){
-                                recvqueue.offer(n);
-
-                                /*
-                                 * Send a notification back if the peer that sent this
-                                 * message is also looking and its logical clock is
-                                 * lagging behind.
-                                 */
-                                if((ackstate == QuorumPeer.ServerState.LOOKING)
-                                        && (n.electionEpoch < logicalclock.get())){
-                                    Vote v = getVote();
-                                    QuorumVerifier qv = self.getQuorumVerifier();
-                                    ToSend notmsg = new ToSend(ToSend.mType.notification,
-                                            v.getId(),
-                                            v.getZxid(),
-                                            logicalclock.get(),
-                                            self.getPeerState(),
-                                            response.sid,
-                                            v.getPeerEpoch(),
-                                            qv.toString().getBytes());
-                                    sendqueue.offer(notmsg);
                                 }
                             } else {
-                                /*
-                                 * If this server is not looking, but the one that sent the ack
-                                 * is looking, then send back what it believes to be the leader.
-                                 */
-                                Vote current = self.getCurrentVote();
-                                if(ackstate == QuorumPeer.ServerState.LOOKING){
-                                    if(LOG.isDebugEnabled()){
-                                        LOG.debug("Sending new notification. My id ={} recipient={} zxid=0x{} leader={} config version = {}",
-                                                self.getId(),
-                                                response.sid,
-                                                Long.toHexString(current.getZxid()),
-                                                current.getId(),
-                                                Long.toHexString(self.getQuorumVerifier().getVersion()));
-                                    }
+                                LOG.info("Backward compatibility mode (before reconfig), server id: {}", response.sid);
+                            }
 
-                                    QuorumVerifier qv = self.getQuorumVerifier();
-                                    ToSend notmsg = new ToSend(
-                                            ToSend.mType.notification,
-                                            current.getId(),
-                                            current.getZxid(),
-                                            current.getElectionEpoch(),
-                                            self.getPeerState(),
-                                            response.sid,
-                                            current.getPeerEpoch(),
-                                            qv.toString().getBytes());
-                                    sendqueue.offer(notmsg);
+                            /*
+                             * If it is from a non-voting server (such as an observer or
+                             * a non-voting follower), respond right away.
+                             */
+                            if(!validVoter(response.sid)) {
+                                Vote current = self.getCurrentVote();
+                                QuorumVerifier qv = self.getQuorumVerifier();
+                                ToSend notmsg = new ToSend(ToSend.mType.notification,
+                                        current.getId(),
+                                        current.getZxid(),
+                                        logicalclock.get(),
+                                        self.getPeerState(),
+                                        response.sid,
+                                        current.getPeerEpoch(),
+                                        qv.toString().getBytes());
+
+                                sendqueue.offer(notmsg);
+                            } else {
+                                // Receive new message
+                                if (LOG.isDebugEnabled()) {
+                                    LOG.debug("Receive new notification message. My id = "
+                                            + self.getId());
+                                }
+
+                                // State of peer that sent this message
+                                QuorumPeer.ServerState ackstate = QuorumPeer.ServerState.LOOKING;
+                                switch (rstate) {
+                                case 0:
+                                    ackstate = QuorumPeer.ServerState.LOOKING;
+                                    break;
+                                case 1:
+                                    ackstate = QuorumPeer.ServerState.FOLLOWING;
+                                    break;
+                                case 2:
+                                    ackstate = QuorumPeer.ServerState.LEADING;
+                                    break;
+                                case 3:
+                                    ackstate = QuorumPeer.ServerState.OBSERVING;
+                                    break;
+                                default:
+                                    continue;
+                                }
+
+                                n.leader = rleader;
+                                n.zxid = rzxid;
+                                n.electionEpoch = relectionEpoch;
+                                n.state = ackstate;
+                                n.sid = response.sid;
+                                n.peerEpoch = rpeerepoch;
+                                n.version = version;
+                                n.qv = rqv;
+                                /*
+                                 * Print notification info
+                                 */
+                                if(LOG.isInfoEnabled()){
+                                    printNotification(n);
+                                }
+
+                                /*
+                                 * If this server is looking, then send proposed leader
+                                 */
+
+                                if(self.getPeerState() == QuorumPeer.ServerState.LOOKING){
+                                    recvqueue.offer(n);
+
+                                    /*
+                                     * Send a notification back if the peer that sent this
+                                     * message is also looking and its logical clock is
+                                     * lagging behind.
+                                     */
+                                    if((ackstate == QuorumPeer.ServerState.LOOKING)
+                                            && (n.electionEpoch < logicalclock.get())){
+                                        Vote v = getVote();
+                                        QuorumVerifier qv = self.getQuorumVerifier();
+                                        ToSend notmsg = new ToSend(ToSend.mType.notification,
+                                                v.getId(),
+                                                v.getZxid(),
+                                                logicalclock.get(),
+                                                self.getPeerState(),
+                                                response.sid,
+                                                v.getPeerEpoch(),
+                                                qv.toString().getBytes());
+                                        sendqueue.offer(notmsg);
+                                    }
+                                } else {
+                                    /*
+                                     * If this server is not looking, but the one that sent the ack
+                                     * is looking, then send back what it believes to be the leader.
+                                     */
+                                    Vote current = self.getCurrentVote();
+                                    if(ackstate == QuorumPeer.ServerState.LOOKING){
+                                        if(LOG.isDebugEnabled()){
+                                            LOG.debug("Sending new notification. My id ={} recipient={} zxid=0x{} leader={} config version = {}",
+                                                    self.getId(),
+                                                    response.sid,
+                                                    Long.toHexString(current.getZxid()),
+                                                    current.getId(),
+                                                    Long.toHexString(self.getQuorumVerifier().getVersion()));
+                                        }
+
+                                        QuorumVerifier qv = self.getQuorumVerifier();
+                                        ToSend notmsg = new ToSend(
+                                                ToSend.mType.notification,
+                                                current.getId(),
+                                                current.getZxid(),
+                                                current.getElectionEpoch(),
+                                                self.getPeerState(),
+                                                response.sid,
+                                                current.getPeerEpoch(),
+                                                qv.toString().getBytes());
+                                        sendqueue.offer(notmsg);
+                                    }
                                 }
                             }
+
+                        } catch (BufferUnderflowException e) {
+                            LOG.warn("Skipping the processing of a partial / malformed response message sent by sid={}",
+                                    response.sid, e);
                         }
+
                     } catch (InterruptedException e) {
                         LOG.warn("Interrupted Exception while waiting for new message" +
                                 e.toString());
