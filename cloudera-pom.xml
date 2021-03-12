@@ -66,7 +66,7 @@
       <repositories>
         <repository>
           <id>cdh.releases.repo</id>
-          <url>https://repository.cloudera.com/content/groups/cdh-releases-rcs</url>
+          <url>http://maven.jenkins.cloudera.com:8081/artifactory/cloudera-mirrors</url>
           <name>CDH Releases Repository</name>
           <snapshots>
             <enabled>false</enabled>
@@ -74,14 +74,13 @@
         </repository>
         <repository>
           <id>cdh.snapshots.repo</id>
-          <url>https://repository.cloudera.com/content/repositories/snapshots</url>
+          <url>http://maven.jenkins.cloudera.com:8081/artifactory/cloudera-mirrors</url>
           <name>CDH Snapshots Repository</name>
           <snapshots>
             <enabled>true</enabled>
           </snapshots>
         </repository>
-      </repositories>
-    </profile>
+      </repositories>    </profile>
     <!-- Similar logic to allow us to skip compilation/tests when run -->
     <!-- via do-release-build or packaging scripts, since we're already -->
     <!-- compiling via direct ant calls. -->

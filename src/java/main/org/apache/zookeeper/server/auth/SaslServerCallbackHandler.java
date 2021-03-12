@@ -136,8 +136,11 @@ public class SaslServerCallbackHandler implements CallbackHandler {
             LOG.info("Setting authorizedID: " + userNameBuilder);
             ac.setAuthorizedID(userNameBuilder.toString());
         } catch (IOException e) {
-            LOG.error("Failed to set name based on Kerberos authentication rules.");
+            LOG.error("Failed to set name based on Kerberos authentication rules. authenticationID: " +
+                    authenticationID + "authorizedID: "  + userNameBuilde, e);
         }
+        LOG.info("name was successfully set for client.  authenticationID: " +
+                authenticationID + "authorizedID: "  + userNameBuilde);
     }
 
     private boolean shouldAppendRealm(KerberosName kerberosName) {
