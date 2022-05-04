@@ -21,13 +21,14 @@ package org.apache.zookeeper.server;
 import java.util.Map;
 import java.util.HashMap;
 
-import junit.framework.Assert;
 
+import org.junit.Assert;
 import org.junit.Test;
 import org.junit.BeforeClass;
 
 /**
  * Testing zk client session initialization logic in SessionTrackerImpl
+ * with and without the fix provided in ZOOKEEPER-1622
  */
 public class SessionIdInitializationTest {
 
@@ -57,7 +58,7 @@ public class SessionIdInitializationTest {
         System.out.println("==============================================");
         System.out.println("2022 05 millis: " + _2022_05);
         System.out.println(long2binary(_2022_05));
-        System.out.println("2021 04 millis: " + _2021_05);
+        System.out.println("2021 05 millis: " + _2021_05);
         System.out.println(long2binary(_2021_05));
         System.out.println("==============================================");
     }
